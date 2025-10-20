@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,21 @@ var httpClient = &http.Client{
 	},
 }
 
+// sanitizeHeaderValue truncates sensitive header values for logging
+func sanitizeHeaderValue(key, value string) string {
+	sensitiveHeaders := []string{"authorization", "auth", "token", "api-key", "x-api-key", "bearer"}
+	lowerKey := strings.ToLower(key)
+
+	for _, sensitive := range sensitiveHeaders {
+		if strings.Contains(lowerKey, sensitive) {
+			if len(value) > 10 {
+				return value[:10] + "..."
+			}
+			return value + "..."
+		}
+	}
+	return value
+}
 
 // logRequest logs the details of the request with a timestamp.
 func logRequest(method, endpoint, description string, headers map[string]string, payload string) {
@@ -37,7 +53,8 @@ func logRequest(method, endpoint, description string, headers map[string]string,
 	}
 	log.Printf(LogFormat, timestamp, LogHeaders, "")
 	for key, value := range headers {
-		log.Printf(LogFormat, timestamp, key, value)
+		sanitizedValue := sanitizeHeaderValue(key, value)
+		log.Printf(LogFormat, timestamp, key, sanitizedValue)
 	}
 	log.Print(DottedSeparator)
 }
