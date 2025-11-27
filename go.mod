@@ -1,3 +1,3 @@
-module github.com/RootDefault-Labz/RestCallPackage
+module github.com/Defolt-Labs/RestCallPackage
 
 go 1.23.2
