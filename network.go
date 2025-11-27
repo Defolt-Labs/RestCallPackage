@@ -360,6 +360,31 @@ func MakeOPTIONSRequest(description, url string, queryParams map[string]string, 
 	}
 	return makeRequest(methodOPTIONS, description, url, payload, headers)
 }
+// MakeXMLPostRequest sends raw XML/SOAP payload without JSON encoding or quoting
+func MakeXMLPostRequest(description, urlStr string, xmlPayload string, headers map[string]string) (string, error) {
+	ensureInitialized()
+
+	// Ensure Content-Type for SOAP/XML
+	if headers == nil {
+		headers = make(map[string]string)
+	}
+	if _, ok := headers["Content-Type"]; !ok {
+		headers["Content-Type"] = "text/xml; charset=UTF-8"
+	}
+
+	// Raw XML body
+	body := bytes.NewBuffer([]byte(xmlPayload))
+
+	// Run using the common execution pipeline (retry + logs)
+	return executeRequest(
+		methodPOST,
+		description,
+		urlStr,
+		body,
+		xmlPayload, // logged raw XML, not wrapped
+		headers,
+	)
+}
 
 // ReadResponseBody simplified to remove duplicate defer
 func ReadResponseBody(resp *http.Response) (string, error) {
