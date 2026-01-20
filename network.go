@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,8 +14,8 @@ import (
 )
 
 var (
-	httpClient *http.Client
-	config     *Config
+	httpClient    *http.Client
+	config        *Config
 	isInitialized bool
 )
 
@@ -25,7 +24,7 @@ func Init(cfg *Config) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
-	
+
 	config = cfg
 	httpClient = createHTTPClient(cfg)
 	isInitialized = true
@@ -37,7 +36,7 @@ func createHTTPClient(cfg *Config) *http.Client {
 	dialer := &net.Dialer{
 		Timeout: cfg.TimeoutConfig.DialTimeout,
 	}
-	
+
 	transport := &http.Transport{
 		Dial:                  dialer.Dial,
 		TLSHandshakeTimeout:   cfg.TimeoutConfig.TLSHandshakeTimeout,
@@ -49,7 +48,7 @@ func createHTTPClient(cfg *Config) *http.Client {
 		MaxConnsPerHost:       cfg.ConnectionConfig.MaxConnsPerHost,
 		TLSClientConfig:       cfg.TLSConfig.buildTLSConfig(),
 	}
-	
+
 	return &http.Client{
 		Timeout:   cfg.BaseTimeout,
 		Transport: transport,
@@ -62,7 +61,7 @@ func ensureInitialized() {
 		// Initialize with default configuration if not explicitly initialized
 		defaultConfig := NewConfig(30 * time.Second)
 		if err := Init(defaultConfig); err != nil {
-			log.Printf("Failed to initialize with default configuration: %v", err)
+			LogError("init-error", fmt.Sprintf("Failed to initialize with default configuration: %v", err))
 		}
 	}
 }
@@ -77,65 +76,10 @@ func sanitizeHeaderValue(key, value string) string {
 			if len(value) > 10 {
 				return value[:10] + "..."
 			}
-			return value + "..."
+			return "***"
 		}
 	}
 	return value
-}
-
-// logRequest logs the details of the request with a timestamp.
-func logRequest(method, endpoint, description string, headers map[string]string, payload string) {
-	if !config.LoggingConfig.Enabled {
-		return
-	}
-	
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	log.Print(DottedSeparator)
-	log.Printf(LogFormat, timestamp, LogRequestDesc, description)
-	log.Printf(LogFormat, timestamp, LogHttpMethod, method)
-	log.Printf(LogFormat, timestamp, LogDestEndpoint, endpoint)
-	
-	if config.LoggingConfig.LogRequestBody {
-		if payload != "" {
-			log.Printf(LogFormat, timestamp, LogPayload, payload)
-		} else {
-			log.Printf(LogFormat, timestamp, LogPayload, LogNullValue)
-		}
-	}
-	
-	if config.LoggingConfig.LogHeaders {
-		log.Printf(LogFormat, timestamp, LogHeaders, "")
-		for key, value := range headers {
-			if config.LoggingConfig.SanitizeHeaders {
-				value = sanitizeHeaderValue(key, value)
-			}
-			log.Printf(LogFormat, timestamp, key, value)
-		}
-	}
-	log.Print(DottedSeparator)
-}
-
-// logResponse logs the details of the response with a timestamp.
-func logResponse(description string, response string, statusCode int) {
-	if !config.LoggingConfig.Enabled {
-		return
-	}
-	
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	log.Print(DottedSeparator)
-	log.Printf(LogFormat, timestamp, LogResponseDesc, description)
-	if statusCode != 0 {
-		log.Printf(LogFormatInt, timestamp, LogResponseStatus, statusCode)
-	}
-	
-	if config.LoggingConfig.LogResponseBody {
-		if response != "" {
-			log.Printf(LogFormat, timestamp, LogResponse, response)
-		} else {
-			log.Printf(LogFormat, timestamp, LogResponse, LogNullValue)
-		}
-	}
-	log.Print(DottedSeparator)
 }
 
 // Add a common request handler
@@ -195,10 +139,10 @@ func makeRequestWithString(method, description, urlStr string, payload string, h
 // Common request execution logic
 func executeRequest(method, description, urlStr string, body io.Reader, payloadStr string, headers map[string]string) (string, error) {
 	ensureInitialized()
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), config.BaseTimeout)
 	defer cancel()
-	
+
 	return executeRequestWithRetry(ctx, method, description, urlStr, body, payloadStr, headers)
 }
 
@@ -206,9 +150,9 @@ func executeRequest(method, description, urlStr string, body io.Reader, payloadS
 func executeRequestWithRetry(ctx context.Context, method, description, urlStr string, body io.Reader, payloadStr string, headers map[string]string) (string, error) {
 	var lastErr error
 	var responseBody string
-	
+
 	maxAttempts := config.RetryConfig.MaxRetries + 1 // +1 for the initial attempt
-	
+
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			// Wait before retry
@@ -217,7 +161,7 @@ func executeRequestWithRetry(ctx context.Context, method, description, urlStr st
 				return "", ctx.Err()
 			case <-time.After(config.RetryConfig.RetryDelay):
 			}
-			
+
 			// Reset body reader for retry
 			if seeker, ok := body.(io.Seeker); ok {
 				seeker.Seek(0, 0)
@@ -225,21 +169,23 @@ func executeRequestWithRetry(ctx context.Context, method, description, urlStr st
 				// Recreate body from payloadStr for retry
 				body = strings.NewReader(payloadStr)
 			}
+
+			LogWarning("retry", fmt.Sprintf("Attempt %d/%d for %s", attempt+1, maxAttempts, description))
 		}
-		
+
 		responseBody, lastErr = executeRequestOnce(ctx, method, description, urlStr, body, payloadStr, headers)
-		
+
 		// If no error or context cancelled, return
 		if lastErr == nil || ctx.Err() != nil {
 			return responseBody, lastErr
 		}
-		
+
 		// Check if we should retry based on status code or error type
 		if !shouldRetry(lastErr) {
 			break
 		}
 	}
-	
+
 	return responseBody, lastErr
 }
 
@@ -260,8 +206,12 @@ func executeRequestOnce(ctx context.Context, method, description, urlStr string,
 	logRequest(method, urlStr, description, headers, payloadStr)
 
 	// Perform the request
+	startTime := time.Now()
 	resp, err := httpClient.Do(req)
+	duration := time.Since(startTime)
+
 	if err != nil {
+		LogError("request-error", fmt.Sprintf("%s: %v", description, err))
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -272,8 +222,8 @@ func executeRequestOnce(ctx context.Context, method, description, urlStr string,
 		return "", err
 	}
 
-	// Log the response details
-	logResponse(description, responseBody, resp.StatusCode)
+	// Log the response details with duration
+	logResponseWithDuration(description, responseBody, resp.StatusCode, duration)
 
 	// Check for non-2xx status codes
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -283,12 +233,47 @@ func executeRequestOnce(ctx context.Context, method, description, urlStr string,
 	return responseBody, nil
 }
 
+// logResponseWithDuration logs response with duration info
+func logResponseWithDuration(description string, response string, statusCode int, duration time.Duration) {
+	if !config.LoggingConfig.Enabled {
+		return
+	}
+
+	logSeparator()
+	logColoredEntry("incoming-response", description, warningColor)
+
+	// Color status code based on value
+	if statusCode != 0 {
+		var statusColorFunc func(a ...interface{}) string
+		switch {
+		case statusCode >= 200 && statusCode < 300:
+			statusColorFunc = successColor
+		case statusCode >= 400 && statusCode < 500:
+			statusColorFunc = warningColor
+		case statusCode >= 500:
+			statusColorFunc = errorColor
+		default:
+			statusColorFunc = statusColor
+		}
+		logColoredEntry("status", statusCode, statusColorFunc)
+	}
+
+	logColoredEntry("duration", duration.String(), methodColor)
+
+	if config.LoggingConfig.LogResponseBody {
+		formattedBody := formatBody(response)
+		logColoredEntry("response", formattedBody, bodyColor)
+	}
+
+	logSeparator()
+}
+
 // shouldRetry determines if a request should be retried based on the error
 func shouldRetry(err error) bool {
 	if err == nil {
 		return false
 	}
-	
+
 	// Check if it's a status code error that should be retried
 	errStr := err.Error()
 	for _, statusCode := range config.RetryConfig.RetryOnStatus {
@@ -297,11 +282,11 @@ func shouldRetry(err error) bool {
 			return true
 		}
 	}
-	
+
 	// Retry on network errors
 	return strings.Contains(errStr, "connection") ||
-		   strings.Contains(errStr, "timeout") ||
-		   strings.Contains(errStr, "EOF")
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "EOF")
 }
 
 // Update the public functions to use the common handler
@@ -360,6 +345,7 @@ func MakeOPTIONSRequest(description, url string, queryParams map[string]string, 
 	}
 	return makeRequest(methodOPTIONS, description, url, payload, headers)
 }
+
 // MakeXMLPostRequest sends raw XML/SOAP payload without JSON encoding or quoting
 func MakeXMLPostRequest(description, urlStr string, xmlPayload string, headers map[string]string) (string, error) {
 	ensureInitialized()
